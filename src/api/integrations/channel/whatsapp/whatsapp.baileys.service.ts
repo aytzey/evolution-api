@@ -1475,10 +1475,14 @@ export class BaileysStartupService extends ChannelStartupService {
           this.logger.verbose(messageRaw);
 
           sendTelemetry(`received.message.${messageRaw.messageType ?? 'unknown'}`);
-          if (messageRaw.key.remoteJid?.includes('@lid') && messageRaw.key.remoteJidAlt) {
+          // fork: WEBHOOK_KEEP_LID=true sends @lid as it came, for consumers that resolve remoteJidAlt themselves.
+          if (
+            process.env.WEBHOOK_KEEP_LID !== 'true' &&
+            messageRaw.key.remoteJid?.includes('@lid') &&
+            messageRaw.key.remoteJidAlt
+          ) {
             messageRaw.key.remoteJid = messageRaw.key.remoteJidAlt;
           }
-          console.log(messageRaw);
 
           this.sendDataWebhook(Events.MESSAGES_UPSERT, messageRaw);
 
@@ -1570,7 +1574,6 @@ export class BaileysStartupService extends ChannelStartupService {
         const cached = await this.baileysCache.get(updateKey);
 
         const secondsSinceEpoch = Math.floor(Date.now() / 1000);
-        console.log('CACHE:', { cached, updateKey, messageTimestamp: update.messageTimestamp, secondsSinceEpoch });
 
         if (
           (update.messageTimestamp && update.messageTimestamp === cached) ||
@@ -2042,14 +2045,22 @@ export class BaileysStartupService extends ChannelStartupService {
     );
   }
 
+  // fork: every incoming message asked WhatsApp for the sender's picture (up to the 60 s query timeout) before the next message
+  // was handled, as did every contact update; a picture, or its absence, is now asked once in a few hours ('' = none).
+  private readonly profilePictureCache = new NodeCache({ stdTTL: 6 * 60 * 60, useClones: false });
+
   public async profilePicture(number: string) {
     const jid = createJid(number);
+    const cached = this.profilePictureCache.get<string>(jid);
+    if (cached !== undefined) return { wuid: jid, profilePictureUrl: cached || null };
 
     try {
       const profilePictureUrl = await this.client.profilePictureUrl(jid, 'image');
+      this.profilePictureCache.set(jid, profilePictureUrl || '');
 
       return { wuid: jid, profilePictureUrl };
     } catch {
+      this.profilePictureCache.set(jid, '', 60 * 60);
       return { wuid: jid, profilePictureUrl: null };
     }
   }

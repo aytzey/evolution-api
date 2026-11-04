@@ -15,6 +15,10 @@ COPY ./tsup.config.ts ./
 
 RUN npm ci --silent
 
+# fork: Baileys fixes on top of the pinned release (see fork/patch-baileys.mjs).
+COPY ./fork ./fork
+RUN node ./fork/patch-baileys.mjs
+
 COPY ./src ./src
 COPY ./public ./public
 COPY ./prisma ./prisma
