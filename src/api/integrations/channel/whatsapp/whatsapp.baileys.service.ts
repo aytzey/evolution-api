@@ -2048,7 +2048,12 @@ export class BaileysStartupService extends ChannelStartupService {
 
   // fork: asks the phone for up to 50 messages of one chat before an anchor (WhatsApp on-demand history) and returns them. One
   // request, no loop; the phone answers only while it is online. The anchor may be any id with a timestamp (default: now).
-  public async fetchHistory(data: { remoteJid: string; count?: number; anchor?: { id?: string; fromMe?: boolean; timestamp?: number } }) {
+  public async fetchHistory(data: {
+    remoteJid: string;
+    count?: number;
+    wait?: number;
+    anchor?: { id?: string; fromMe?: boolean; timestamp?: number };
+  }) {
     if (!data?.remoteJid) throw new BadRequestException('remoteJid is required');
     const key = {
       remoteJid: createJid(data.remoteJid),
@@ -2066,7 +2071,7 @@ export class BaileysStartupService extends ChannelStartupService {
       const timer = setTimeout(() => {
         this.client.ev.off('messaging-history.set', listen);
         resolve([]);
-      }, 60_000);
+      }, Math.min(Math.max(Number(data.wait) || 60, 10), 300) * 1000); // a sleeping phone answers minutes late
       this.client.ev.on('messaging-history.set', listen);
     });
     const requestId = await this.client.fetchMessageHistory(count, key, Number(data.anchor?.timestamp) || Math.floor(Date.now() / 1000));

@@ -10,7 +10,7 @@ Evolution API release tags with fixes on top (currently `2.3.7`):
 - Profile pictures are looked up once per contact every few hours instead of once per incoming message and contact update.
 - `POST /chat/fetchHistory/{instance}` `{ remoteJid, count?, anchor?: { id, fromMe, timestamp } }` asks the phone once for up
   to 50 messages of that chat before the anchor (default: now) and returns them as `{ id, remoteJid, fromMe, timestamp, text }`
-  (empty after 60 s if the phone does not answer). On-demand history no longer prints the messages to stdout.
+  (empty after `wait` seconds, default 60, at most 300, if the phone does not answer; a sleeping phone answers minutes late). On-demand history no longer prints the messages to stdout.
 
 Build an image:
 
