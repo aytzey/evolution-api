@@ -135,7 +135,7 @@ import { Label } from 'baileys/lib/Types/Label';
 import { LabelAssociation } from 'baileys/lib/Types/LabelAssociation';
 import { spawn } from 'child_process';
 import { isArray, isBase64, isURL } from 'class-validator';
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import EventEmitter2 from 'eventemitter2';
 import ffmpeg from 'fluent-ffmpeg';
 import FormData from 'form-data';
@@ -941,7 +941,8 @@ export class BaileysStartupService extends ChannelStartupService {
     }) => {
       try {
         if (syncType === proto.HistorySync.HistorySyncType.ON_DEMAND) {
-          console.log('received on-demand history sync, messages=', messages);
+          // fork: the count only; the messages themselves are someone's chat.
+          this.logger.info(`received on-demand history sync, ${messages.length} msgs`);
         }
         console.log(
           `recv ${chats.length} chats, ${contacts.length} contacts, ${messages.length} msgs (is latest: ${isLatest}, progress: ${progress}%), type: ${syncType}`,
@@ -2043,6 +2044,49 @@ export class BaileysStartupService extends ChannelStartupService {
       (this.localSettings.syncFullHistory && msg?.syncType === 2) ||
       (!this.localSettings.syncFullHistory && msg?.syncType === 3)
     );
+  }
+
+  // fork: asks the phone for up to 50 messages of one chat before an anchor (WhatsApp on-demand history) and returns them. One
+  // request, no loop; the phone answers only while it is online. The anchor may be any id with a timestamp (default: now).
+  public async fetchHistory(data: { remoteJid: string; count?: number; anchor?: { id?: string; fromMe?: boolean; timestamp?: number } }) {
+    if (!data?.remoteJid) throw new BadRequestException('remoteJid is required');
+    const key = {
+      remoteJid: createJid(data.remoteJid),
+      fromMe: Boolean(data.anchor?.fromMe),
+      id: data.anchor?.id || '3EB0' + randomBytes(8).toString('hex').toUpperCase(),
+    };
+    const count = Math.min(Math.max(Number(data.count) || 50, 1), 50);
+    const answer = new Promise<WAMessage[]>((resolve) => {
+      const listen = ({ messages, syncType }: { messages: WAMessage[]; syncType?: proto.HistorySync.HistorySyncType }) => {
+        if (syncType !== proto.HistorySync.HistorySyncType.ON_DEMAND) return;
+        clearTimeout(timer);
+        this.client.ev.off('messaging-history.set', listen);
+        resolve(messages);
+      };
+      const timer = setTimeout(() => {
+        this.client.ev.off('messaging-history.set', listen);
+        resolve([]);
+      }, 60_000);
+      this.client.ev.on('messaging-history.set', listen);
+    });
+    const requestId = await this.client.fetchMessageHistory(count, key, Number(data.anchor?.timestamp) || Math.floor(Date.now() / 1000));
+    const messages = await answer;
+    return {
+      requestId,
+      messages: messages.map((m) => ({
+        id: m.key?.id,
+        remoteJid: m.key?.remoteJid,
+        fromMe: Boolean(m.key?.fromMe),
+        timestamp: typeof m.messageTimestamp === 'number' ? m.messageTimestamp : Number(m.messageTimestamp?.toString()),
+        text:
+          m.message?.conversation ||
+          m.message?.extendedTextMessage?.text ||
+          m.message?.imageMessage?.caption ||
+          m.message?.videoMessage?.caption ||
+          m.message?.documentMessage?.fileName ||
+          '',
+      })),
+    };
   }
 
   // fork: every incoming message asked WhatsApp for the sender's picture (up to the 60 s query timeout) before the next message

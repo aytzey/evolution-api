@@ -42,6 +42,11 @@ export class ChatController {
     return await this.waMonitor.waInstances[instanceName].deleteMessage(data);
   }
 
+  // fork: see BaileysStartupService.fetchHistory.
+  public async fetchHistory({ instanceName }: InstanceDto, data: any) {
+    return await this.waMonitor.waInstances[instanceName].fetchHistory(data);
+  }
+
   public async fetchProfilePicture({ instanceName }: InstanceDto, data: NumberDto) {
     return await this.waMonitor.waInstances[instanceName].profilePicture(data.number);
   }

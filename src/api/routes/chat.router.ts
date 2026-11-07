@@ -110,6 +110,16 @@ export class ChatRouter extends RouterBroker {
 
         return res.status(HttpStatus.OK).json(response);
       })
+      .post(this.routerPath('fetchHistory'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<any>({
+          request: req,
+          schema: null,
+          ClassRef: Object,
+          execute: (instance, data) => chatController.fetchHistory(instance, data),
+        });
+
+        return res.status(HttpStatus.OK).json(response);
+      })
       .post(this.routerPath('getBase64FromMediaMessage'), ...guards, async (req, res) => {
         const response = await this.dataValidate<getBase64FromMediaMessageDto>({
           request: req,
