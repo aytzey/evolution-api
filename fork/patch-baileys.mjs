@@ -7,7 +7,8 @@
 // Upstream: WhiskeySockets/Baileys#2858 (fix PR #2866), fazer-ai/baileys-api#404. Drop this once Baileys ships the fix.
 //
 // Second: getHttpStream throws a Boom whose HTTP code is in output.statusCode, but downloadMediaMessage reads error.status,
-// so media gone from WhatsApp's CDN (404/410, older than a few weeks) never asked the phone to upload it again.
+// so media gone from WhatsApp's CDN never asked the phone to upload it again. Expired media answers 403 there (07.11.2026:
+// every photo older than about a month), so 403 asks too.
 
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -31,8 +32,8 @@ patch("Socket/messages-recv.js", STATUS, [
   ["    ws.on('CB:ack,class:message', (node) => {", "    ws.on('CB:status', async (node) => {\n        await processNode('status', node, 'acking status stanza', handleStatus);\n    });\n    ws.on('CB:ack,class:message', (node) => {"],
 ], "<status>");
 
-const REUPLOAD = "/* fork: reupload on 404/410 */";
+const REUPLOAD = "/* fork: reupload on 403/404/410 */";
 patch("Utils/messages.js", REUPLOAD, [
   ["            typeof error?.status === 'number' && // treat errors with status as HTTP failures requiring reupload\n            REUPLOAD_REQUIRED_STATUS.includes(error.status)) {",
-    "            " + REUPLOAD + " REUPLOAD_REQUIRED_STATUS.includes(error?.status ?? error?.output?.statusCode)) {"],
+    "            " + REUPLOAD + " [403, ...REUPLOAD_REQUIRED_STATUS].includes(error?.status ?? error?.output?.statusCode)) {"],
 ], "media reupload");
