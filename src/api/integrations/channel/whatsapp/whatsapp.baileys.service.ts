@@ -104,6 +104,7 @@ import makeWASocket, {
   DisconnectReason,
   downloadContentFromMessage,
   downloadMediaMessage,
+  normalizeMessageContent,
   generateWAMessageFromContent,
   getAggregateVotesInPollMessage,
   GetCatalogOptions,
@@ -2076,9 +2077,23 @@ export class BaileysStartupService extends ChannelStartupService {
     });
     const requestId = await this.client.fetchMessageHistory(count, key, Number(data.anchor?.timestamp) || Math.floor(Date.now() / 1000));
     const messages = await answer;
+    // A media message carries what /chat/getBase64FromMediaMessage needs (mediaKey as an index object, as that call reads it).
+    const media = (m: WAMessage) => {
+      const content = normalizeMessageContent(m.message);
+      const type = TypeMediaMessage.find((t) => content?.[t]);
+      if (!type) return undefined;
+      const item = content[type];
+      return {
+        type,
+        message: { [type]: { ...item, mediaKey: item.mediaKey ? { ...Uint8Array.from(item.mediaKey) } : undefined } },
+        mimetype: item.mimetype,
+        fileLength: Number(item.fileLength?.toString() || 0) || undefined,
+      };
+    };
     return {
       requestId,
       messages: messages.map((m) => ({
+        media: media(m),
         id: m.key?.id,
         remoteJid: m.key?.remoteJid,
         fromMe: Boolean(m.key?.fromMe),
