@@ -4,6 +4,7 @@ Evolution API release tags with fixes on top (currently `2.3.7`):
 
 - `fork/patch-baileys.mjs` (run by the Dockerfile): Baileys acks WhatsApp's `<status>` stanzas, so the socket no longer
   drops every 50 minutes and turns deaf; a failing offline node no longer stalls the offline queue.
+  It also asks the phone to upload media again when WhatsApp's CDN answers 404/410 (Baileys read the wrong error field).
 - `WEBHOOK_KEEP_LID=true` keeps `@lid` in `key.remoteJid` of `messages.upsert` (default: replaced by `remoteJidAlt`, as
   upstream), for consumers that resolve `remoteJidAlt` themselves.
 - `messages.upsert` and `messages.update` no longer print every message and cache lookup to stdout (use `LOG_LEVEL`).
