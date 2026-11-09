@@ -257,6 +257,19 @@ export class BaileysStartupService extends ChannelStartupService {
   private readonly MESSAGE_CACHE_TTL_SECONDS = 5 * 60; // 5 minutes - avoid duplicate message processing
   private readonly UPDATE_CACHE_TTL_SECONDS = 30 * 60; // 30 minutes - avoid duplicate status updates
 
+  // fork: on-demand history answers, kept in memory for 24 h. A sleeping phone answers hours late, after fetchHistory stopped
+  // waiting; such an answer used to be dropped (09.11: one came 6 h late). The next fetchHistory for that chat hands it over.
+  // Only answers to on-demand requests are kept, and a restart clears them.
+  private onDemandAnswers: { at: number; sessionId?: string; messages: WAMessage[]; taken?: boolean }[] = [];
+  private readonly onDemandWaiters = new Set<(answer: { at: number; sessionId?: string; messages: WAMessage[]; taken?: boolean }) => void>();
+  private keepOnDemand(messages: WAMessage[], sessionId?: string) {
+    const now = Date.now();
+    this.onDemandAnswers = this.onDemandAnswers.filter((answer) => now - answer.at < 24 * 60 * 60 * 1000).slice(-50);
+    const answer = { at: now, sessionId, messages };
+    this.onDemandAnswers.push(answer);
+    for (const waiter of [...this.onDemandWaiters]) waiter(answer);
+  }
+
   public stateConnection: wa.StateConnection = { state: 'close' };
 
   public phoneNumber: string;
@@ -932,6 +945,7 @@ export class BaileysStartupService extends ChannelStartupService {
       isLatest,
       progress,
       syncType,
+      peerDataRequestSessionId,
     }: {
       chats: Chat[];
       contacts: Contact[];
@@ -939,11 +953,13 @@ export class BaileysStartupService extends ChannelStartupService {
       isLatest?: boolean;
       progress?: number;
       syncType?: proto.HistorySync.HistorySyncType;
+      peerDataRequestSessionId?: string;
     }) => {
       try {
         if (syncType === proto.HistorySync.HistorySyncType.ON_DEMAND) {
           // fork: the count only; the messages themselves are someone's chat.
           this.logger.info(`received on-demand history sync, ${messages.length} msgs`);
+          this.keepOnDemand(messages, peerDataRequestSessionId);
         }
         console.log(
           `recv ${chats.length} chats, ${contacts.length} contacts, ${messages.length} msgs (is latest: ${isLatest}, progress: ${progress}%), type: ${syncType}`,
@@ -2049,6 +2065,8 @@ export class BaileysStartupService extends ChannelStartupService {
 
   // fork: asks the phone for up to 50 messages of one chat before an anchor (WhatsApp on-demand history) and returns them. One
   // request, no loop; the phone answers only while it is online. The anchor may be any id with a timestamp (default: now).
+  // status: "answered" (the phone answered within `wait`), "late" (an answer to an earlier call that came after it stopped
+  // waiting; handed over without asking the phone again), "timeout" (no answer yet: not the same as an empty chat; ask again later).
   public async fetchHistory(data: {
     remoteJid: string;
     count?: number;
@@ -2056,27 +2074,45 @@ export class BaileysStartupService extends ChannelStartupService {
     anchor?: { id?: string; fromMe?: boolean; timestamp?: number };
   }) {
     if (!data?.remoteJid) throw new BadRequestException('remoteJid is required');
+    const chat = createJid(data.remoteJid);
+    // An answer belongs to this chat when one of its messages is in it (by its phone or LID id).
+    const forChat = (answer: { messages: WAMessage[] }) =>
+      answer.messages.some((m) => [m.key?.remoteJid, (m.key as { remoteJidAlt?: string })?.remoteJidAlt].includes(chat));
+    const late = this.onDemandAnswers.filter((answer) => !answer.taken && forChat(answer));
+    if (late.length) {
+      late.forEach((answer) => (answer.taken = true));
+      return this.historyResult('late', undefined, late.flatMap((answer) => answer.messages), Math.max(...late.map((answer) => answer.at)));
+    }
     const key = {
-      remoteJid: createJid(data.remoteJid),
+      remoteJid: chat,
       fromMe: Boolean(data.anchor?.fromMe),
       id: data.anchor?.id || '3EB0' + randomBytes(8).toString('hex').toUpperCase(),
     };
     const count = Math.min(Math.max(Number(data.count) || 50, 1), 50);
-    const answer = new Promise<WAMessage[]>((resolve) => {
-      const listen = ({ messages, syncType }: { messages: WAMessage[]; syncType?: proto.HistorySync.HistorySyncType }) => {
-        if (syncType !== proto.HistorySync.HistorySyncType.ON_DEMAND) return;
+    let requestId: string | undefined;
+    type Answer = { at: number; sessionId?: string; messages: WAMessage[]; taken?: boolean };
+    // The answer is matched to this request by its session id, or else by chat; it is kept by keepOnDemand whichever socket
+    // received it, so a reconnect while waiting does not lose it.
+    const answer = new Promise<Answer | null>((resolve) => {
+      const done = (got: Answer | null) => {
         clearTimeout(timer);
-        this.client.ev.off('messaging-history.set', listen);
-        resolve(messages);
+        this.onDemandWaiters.delete(waiter);
+        resolve(got);
       };
-      const timer = setTimeout(() => {
-        this.client.ev.off('messaging-history.set', listen);
-        resolve([]);
-      }, Math.min(Math.max(Number(data.wait) || 60, 10), 300) * 1000); // a sleeping phone answers minutes late
-      this.client.ev.on('messaging-history.set', listen);
+      const waiter = (got: Answer) => {
+        if (got.taken || !((requestId && got.sessionId === requestId) || forChat(got))) return;
+        got.taken = true;
+        done(got);
+      };
+      const timer = setTimeout(() => done(null), Math.min(Math.max(Number(data.wait) || 60, 10), 300) * 1000); // a sleeping phone answers minutes late
+      this.onDemandWaiters.add(waiter);
     });
-    const requestId = await this.client.fetchMessageHistory(count, key, Number(data.anchor?.timestamp) || Math.floor(Date.now() / 1000));
-    const messages = await answer;
+    requestId = await this.client.fetchMessageHistory(count, key, Number(data.anchor?.timestamp) || Math.floor(Date.now() / 1000));
+    const got = await answer;
+    return got ? this.historyResult('answered', requestId, got.messages, got.at) : this.historyResult('timeout', requestId, [], undefined);
+  }
+
+  private historyResult(status: 'answered' | 'late' | 'timeout', requestId: string | undefined, messages: WAMessage[], at: number | undefined) {
     // A media message carries what /chat/getBase64FromMediaMessage needs (mediaKey as an index object, as that call reads it).
     const media = (m: WAMessage) => {
       const content = normalizeMessageContent(m.message);
@@ -2091,7 +2127,9 @@ export class BaileysStartupService extends ChannelStartupService {
       };
     };
     return {
+      status,
       requestId,
+      answeredAt: at ? new Date(at).toISOString() : undefined,
       messages: messages.map((m) => ({
         media: media(m),
         id: m.key?.id,

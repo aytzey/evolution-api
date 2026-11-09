@@ -12,7 +12,11 @@ Evolution API release tags with fixes on top (currently `2.3.7`):
 - `POST /chat/fetchHistory/{instance}` `{ remoteJid, count?, anchor?: { id, fromMe, timestamp } }` asks the phone once for up
   to 50 messages of that chat before the anchor (default: now) and returns them as `{ id, remoteJid, fromMe, timestamp, text, media? }` (`media.message` goes straight into
   `getBase64FromMediaMessage` with the key)
-  (empty after `wait` seconds, default 60, at most 300, if the phone does not answer; a sleeping phone answers minutes late). On-demand history no longer prints the messages to stdout.
+  (`status`: `answered`; `timeout` with no messages after `wait` seconds, default 60, at most 300, when the phone has not
+  answered yet, which is not an empty chat). A sleeping phone answers minutes or hours late: every on-demand answer is kept in
+  memory for 24 h, and the next call for that chat returns it at once as `status: late` without asking the phone again (a
+  restart clears them). An answer is matched to its request by `peerDataRequestSessionId`, else by chat (phone or LID id).
+  On-demand history no longer prints the messages to stdout.
 
 Build an image:
 
