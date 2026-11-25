@@ -666,7 +666,15 @@ export class BaileysStartupService extends ChannelStartupService {
     const socketConfig: UserFacingSocketConfig = {
       ...options,
       version,
-      logger: P({ level: this.logBaileys }),
+      // fork: Baileys' error lines carry the sender envelope (JIDs, numbers, push name, whole stanzas) of any chat, e.g.
+      // "failed to decrypt message" for every undecryptable message; the event stays, the identities do not.
+      logger: P({
+        level: this.logBaileys,
+        redact: {
+          paths: ['key', 'sender', 'author', 'node', 'attrs', 'content', 'ids', 'jid', 'err.data', 'error.data'],
+          censor: '[redacted]',
+        },
+      }),
       printQRInTerminal: false,
       auth: {
         creds: this.instance.authState.state.creds,
@@ -731,14 +739,13 @@ export class BaileysStartupService extends ChannelStartupService {
 
     this.eventHandler();
 
+    // fork: call packets (caller of any chat) are no longer printed to stdout
     this.client.ws.on('CB:call', (packet) => {
-      console.log('CB:call', packet);
       const payload = { event: 'CB:call', packet: packet };
       this.sendDataWebhook(Events.CALL, payload, true, ['websocket']);
     });
 
     this.client.ws.on('CB:ack,class:call', (packet) => {
-      console.log('CB:ack,class:call', packet);
       const payload = { event: 'CB:ack,class:call', packet: packet };
       this.sendDataWebhook(Events.CALL, payload, true, ['websocket']);
     });
@@ -1117,37 +1124,31 @@ export class BaileysStartupService extends ChannelStartupService {
     ) => {
       try {
         for (const received of messages) {
-          if (
-            received?.messageStubParameters?.some?.((param) =>
-              [
-                'No matching sessions found for message',
-                'Bad MAC',
-                'failed to decrypt message',
-                'SessionError',
-                'Invalid PreKey ID',
-                'No session record',
-                'No session found to decrypt message',
-                'Message absent from node',
-              ].some((err) => param?.includes?.(err)),
-            )
-          ) {
-            this.logger.warn(`Message ignored with messageStubParameters: ${JSON.stringify(received, null, 2)}`);
+          const undecryptable = [
+            'No matching sessions found for message',
+            'Bad MAC',
+            'failed to decrypt message',
+            'SessionError',
+            'Invalid PreKey ID',
+            'No session record',
+            'No session found to decrypt message',
+            'Message absent from node',
+          ].find((err) => received?.messageStubParameters?.some?.((param) => param?.includes?.(err)));
+          if (undecryptable) {
+            // fork: the reason only; the envelope (JID, number, push name) belongs to any chat.
+            this.logger.warn(`Message ignored: ${undecryptable}`);
             continue;
           }
-          if (received.message?.conversation || received.message?.extendedTextMessage?.text) {
+          // fork: these debugging texts act only when typed on our own device (fromMe), never for another sender.
+          if (received.key?.fromMe && (received.message?.conversation || received.message?.extendedTextMessage?.text)) {
             const text = received.message?.conversation || received.message?.extendedTextMessage?.text;
 
             if (text == 'requestPlaceholder' && !requestId) {
-              const messageId = await this.client.requestPlaceholderResend(received.key);
-
-              console.log('requested placeholder resync, id=', messageId);
-            } else if (requestId) {
-              console.log('Message received from phone, id=', requestId, received);
+              await this.client.requestPlaceholderResend(received.key);
             }
 
             if (text == 'onDemandHistSync') {
-              const messageId = await this.client.fetchMessageHistory(50, received.key, received.messageTimestamp!);
-              console.log('requested on-demand sync, id=', messageId);
+              await this.client.fetchMessageHistory(50, received.key, received.messageTimestamp!);
             }
           }
 
@@ -1253,7 +1254,7 @@ export class BaileysStartupService extends ChannelStartupService {
                   data: { name: received.pushName },
                 });
               } catch {
-                console.log(`Chat insert record ignored: ${received.key.remoteJid} - ${this.instanceId}`);
+                this.logger.verbose(`Chat insert record ignored: ${received.key.remoteJid} - ${this.instanceId}`);
               }
             }
           }
@@ -1706,7 +1707,7 @@ export class BaileysStartupService extends ChannelStartupService {
             findMessage = messages[0] || null;
 
             if (!findMessage?.id) {
-              this.logger.warn(`Original message not found for update. Skipping. Key: ${JSON.stringify(key)}`);
+              this.logger.verbose(`Original message not found for update. Skipping. Key: ${JSON.stringify(key)}`);
               continue;
             }
             message.messageId = findMessage.id;
@@ -1785,7 +1786,9 @@ export class BaileysStartupService extends ChannelStartupService {
               try {
                 await this.prismaRepository.chat.update({ where: { id: existingChat.id }, data: chatToInsert });
               } catch {
-                console.log(`Chat insert record ignored: ${chatToInsert.remoteJid} - ${chatToInsert.instanceId}`);
+                this.logger.verbose(
+                  `Chat insert record ignored: ${chatToInsert.remoteJid} - ${chatToInsert.instanceId}`,
+                );
               }
             }
           }
@@ -1866,7 +1869,7 @@ export class BaileysStartupService extends ChannelStartupService {
         this.sendDataWebhook(Events.GROUP_PARTICIPANTS_UPDATE, enhancedParticipantsUpdate);
       } catch (error) {
         this.logger.error(
-          `Failed to resolve participant data for GROUP_PARTICIPANTS_UPDATE webhook: ${error.message} | Group: ${participantsUpdate.id} | Participants: ${participantsUpdate.participants.length}`,
+          `Failed to resolve participant data for GROUP_PARTICIPANTS_UPDATE webhook: ${error.message} | Participants: ${participantsUpdate.participants.length}`,
         );
         // Fallback - envia sem conversão
         this.sendDataWebhook(Events.GROUP_PARTICIPANTS_UPDATE, participantsUpdate);
@@ -4498,7 +4501,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
     if ((cacheConf?.REDIS?.ENABLED && cacheConf?.REDIS?.URI !== '') || cacheConf?.LOCAL?.ENABLED) {
       if (await groupMetadataCache?.has(groupJid)) {
-        console.log(`Cache request for group: ${groupJid}`);
+        this.logger.verbose(`Cache request for group: ${groupJid}`);
         const meta = await groupMetadataCache.get(groupJid);
 
         if (Date.now() - meta.timestamp > 3600000) {
@@ -4508,7 +4511,7 @@ export class BaileysStartupService extends ChannelStartupService {
         return meta.data;
       }
 
-      console.log(`Cache request for group: ${groupJid} - not found`);
+      this.logger.verbose(`Cache request for group: ${groupJid} - not found`);
       return await this.updateGroupMetadataCache(groupJid);
     }
 

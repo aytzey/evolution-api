@@ -70,3 +70,11 @@ e> patch: expected code not found` when a Baileys upgrade moves it. Re-check eac
     messages are therefore not applied by Evolution.
   - Other protocol messages (history notifications, app-state key shares with key material, placeholder answers, LID
     mappings, disappearing-message settings) are no longer posted as `MESSAGES_EDITED`.
+- **Logs** (`LOG_LEVEL=ERROR,WARN` keeps none of these): call packets (`CB:call`, `CB:ack,class:call`) and placeholder
+  answers are no longer printed to stdout; an undecryptable message logs `Message ignored: <reason>` instead of its envelope;
+  "original message not found", chat-name and group-cache lines are `VERBOSE`; the group participant error no longer names
+  the group. Baileys' own logger redacts `key`, `sender`, `author`, `node`, `attrs`, `content`, `ids`, `jid`, `err.data`,
+  `error.data`: its error lines (e.g. `failed to decrypt message`, `error in handling message`) keep the event, not the
+  JIDs, numbers or push names.
+- **Text-triggered device actions**: the debugging texts `requestPlaceholder` and `onDemandHistSync` act only when typed on
+  our own device (`fromMe`), not when anyone sends them.
