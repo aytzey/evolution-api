@@ -4045,7 +4045,9 @@ export class BaileysStartupService extends ChannelStartupService {
           {},
           { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
         );
-      } catch {
+      } catch (error) {
+        // fork: not a WhatsApp media path (400) or over MEDIA_DOWNLOAD_MAX_MB (413): a retry gets the same answer
+        if ([400, 413].includes(error?.output?.statusCode)) throw error;
         this.logger.error('Download Media failed, trying to retry in 5 seconds...');
         await new Promise((resolve) => setTimeout(resolve, 5000));
         const mediaType = Object.keys(msg.message).find((key) => key.endsWith('Message'));

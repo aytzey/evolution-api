@@ -17,6 +17,11 @@
 // `from` is our own JID/LID: rc.9 leaves fromMe false for those), and a placeholder answer only for a message id this
 // session asked for. Upstream master has the same four-type guard plus a decodeMessageNode change that sets fromMe on
 // self peer stanzas (src/Utils/process-message.ts SELF_ONLY_TYPES, src/Utils/decode-wa-message.ts); drop this on upgrade.
+//
+// Fourth (security): media downloads follow the sender's `url`/`directPath` ("@evil.host/x" turns
+// https://mmg.whatsapp.net + directPath into another host), have no time limit and buffer without limit. Downloads now go
+// only to https://mmg.whatsapp.net, message media is capped (MEDIA_DOWNLOAD_MAX_MB, default 20) and limited to 60 s, and
+// an error on the HTTP body now reaches the reader instead of leaving it waiting forever.
 
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -89,3 +94,61 @@ patch("Socket/messages-recv.js", ASKED, [
     "        const pdoMessage = {\n            placeholderMessageResendRequest: ["],
 ], "placeholder request");
 
+const MEDIA = "/* fork: WhatsApp-only, bounded media download */";
+patch("Utils/messages-media.js", MEDIA, [
+  ["        method: 'GET',\n        headers: options.headers\n    });",
+    "        method: 'GET',\n        headers: options.headers,\n        signal: options.signal\n    });"],
+  ["const DEF_HOST = 'mmg.whatsapp.net';\n",
+    "const DEF_HOST = 'mmg.whatsapp.net';\n" + MEDIA + "\n" +
+    "const FORK_MEDIA_MAX_MB = Number(process.env.MEDIA_DOWNLOAD_MAX_MB);\n" +
+    "const FORK_MEDIA_MAX_BYTES = (FORK_MEDIA_MAX_MB > 0 ? FORK_MEDIA_MAX_MB : 20) * 1024 * 1024;\n" +
+    "const FORK_MEDIA_TIMEOUT_MS = 60000;\n" +
+    "/** The URL as fetched, only when it is https on WhatsApp's media host (no userinfo, port or other host). */\n" +
+    "const forkMediaUrl = (value) => {\n" +
+    "    try {\n" +
+    "        const parsed = new URL(value);\n" +
+    "        return parsed.protocol === 'https:' && parsed.hostname === DEF_HOST && !parsed.port && !parsed.username && !parsed.password\n" +
+    "            ? parsed.href\n" +
+    "            : undefined;\n" +
+    "    }\n" +
+    "    catch {\n" +
+    "        return undefined;\n" +
+    "    }\n" +
+    "};\n"],
+  ["    const isValidMediaUrl = url?.startsWith('https://mmg.whatsapp.net/');\n" +
+   "    const downloadUrl = isValidMediaUrl ? url : getUrlFromDirectPath(directPath);\n" +
+   "    if (!downloadUrl) {\n" +
+   "        throw new Boom('No valid media URL or directPath present in message', { statusCode: 400 });\n" +
+   "    }\n" +
+   "    const keys = await getMediaKeys(mediaKey, type);\n" +
+   "    return downloadEncryptedContent(downloadUrl, keys, opts);",
+   "    const downloadUrl = forkMediaUrl(url) ||\n" +
+   "        (typeof directPath === 'string' && directPath.startsWith('/') ? forkMediaUrl(getUrlFromDirectPath(directPath)) : undefined);\n" +
+   "    if (!downloadUrl) {\n" +
+   "        throw new Boom('Media location is not a WhatsApp media path', { statusCode: 400 });\n" +
+   "    }\n" +
+   "    const keys = await getMediaKeys(mediaKey, type);\n" +
+   "    // history and app-state blobs come from our own phone / WhatsApp's server and may be large: no cap there\n" +
+   "    const bounded = type !== 'md-msg-hist' && type !== 'md-app-state';\n" +
+   "    return downloadEncryptedContent(downloadUrl, keys, bounded ? { ...opts, forkMaxBytes: FORK_MEDIA_MAX_BYTES, forkTimeoutMs: FORK_MEDIA_TIMEOUT_MS } : opts);"],
+  ["export const downloadEncryptedContent = async (downloadUrl, { cipherKey, iv }, { startByte, endByte, options } = {}) => {",
+    "export const downloadEncryptedContent = async (downloadUrl, { cipherKey, iv }, { startByte, endByte, options, forkMaxBytes, forkTimeoutMs } = {}) => {"],
+  ["    const fetched = await getHttpStream(downloadUrl, {\n        ...(options || {}),\n        headers\n    });",
+    "    const forkAbort = forkTimeoutMs ? new AbortController() : undefined;\n" +
+    "    const forkTimer = forkAbort && setTimeout(() => forkAbort.abort(new Boom('Media download timed out', { statusCode: 408 })), forkTimeoutMs);\n" +
+    "    let forkBytes = 0;\n" +
+    "    const fetched = await getHttpStream(downloadUrl, {\n        ...(options || {}),\n        headers,\n" +
+    "        ...(forkAbort ? { signal: forkAbort.signal } : {})\n" +
+    "    }).catch(error => {\n        clearTimeout(forkTimer);\n        throw error;\n    });"],
+  ["        transform(chunk, _, callback) {\n            let data = Buffer.concat([remainingBytes, chunk]);",
+    "        transform(chunk, _, callback) {\n" +
+    "            forkBytes += chunk.length;\n" +
+    "            if (forkMaxBytes && forkBytes > forkMaxBytes) {\n" +
+    "                return callback(new Boom(`Media is larger than ${forkMaxBytes} bytes`, { statusCode: 413 }));\n" +
+    "            }\n" +
+    "            let data = Buffer.concat([remainingBytes, chunk]);"],
+  ["    return fetched.pipe(output, { end: true });",
+    "    fetched.on('error', error => output.destroy(error));\n" +
+    "    output.on('close', () => {\n        clearTimeout(forkTimer);\n        fetched.destroy();\n    });\n" +
+    "    return fetched.pipe(output, { end: true });"],
+], "media download");
