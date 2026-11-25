@@ -3,6 +3,7 @@ import { prismaRepository } from '@api/server.module';
 import { Auth, configService, Database } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 import { ForbiddenException, UnauthorizedException } from '@exceptions';
+import { sameKey } from '@utils/sameKey';
 import { NextFunction, Request, Response } from 'express';
 
 const logger = new Logger('GUARD');
@@ -16,7 +17,7 @@ async function apikey(req: Request, _: Response, next: NextFunction) {
     throw new UnauthorizedException();
   }
 
-  if (env.KEY === key) {
+  if (sameKey(key, env.KEY)) {
     return next();
   }
 
@@ -30,7 +31,7 @@ async function apikey(req: Request, _: Response, next: NextFunction) {
       const instance = await prismaRepository.instance.findUnique({
         where: { name: param.instanceName },
       });
-      if (instance.token === key) {
+      if (sameKey(key, instance.token)) {
         return next();
       }
     } else {

@@ -24,15 +24,10 @@ Evolution API release tags with fixes on top (currently `2.3.7`):
 - `whatsappNumbers` adds `lidJid` to an existing number when the session already knows its LID (store only; Baileys'
   `getLIDForPN` would ask WhatsApp on a miss, one more lookup per number).
 
-Build an image:
+## Security fixes (branch `katay-lid-lookup`, from the KATAY CRM review WA-SECURITY S1, S2, S7, S9, S13, N2)
 
-```sh
-git pull && docker build -t aytzey/evolution-api:$(git rev-parse --short HEAD) .
-```
-
-Upstream changes come from release tags (`git fetch upstream --tags && git merge 2.3.x`), not `develop`: 2.4.0 requires
-licence activation.
-e> patch: expected code not found` when a Baileys upgrade moves it. Re-check each one on upgrade.
+Baileys changes live in `fork/patch-baileys.mjs`: each edit names the exact code it replaces, and the Docker build stops
+with `Baileys <name> patch: expected code not found` when a Baileys upgrade moves it. Re-check each one on upgrade.
 
 - **Own-account protocol messages** (patches `own-account protocol messages`, `own-account history state`,
   `placeholder request`). Baileys rc.9 acted on history-sync notifications, app-state key shares, LID migration mappings
@@ -78,3 +73,17 @@ e> patch: expected code not found` when a Baileys upgrade moves it. Re-check eac
   JIDs, numbers or push names.
 - **Text-triggered device actions**: the debugging texts `requestPlaceholder` and `onDemandHistSync` act only when typed on
   our own device (`fromMe`), not when anyone sends them.
+- **API keys** are compared in constant time (`src/utils/sameKey.ts`: SHA-256 of both, `timingSafeEqual`): the global key
+  and the instance token in the auth guard, the global key on the websocket. `/instance/fetchInstances` and the websocket
+  still look an instance token up in the database.
+- Not changed: with a pairing code Evolution still creates the socket without `CONFIG_SESSION_PHONE_CLIENT` (Linked Devices
+  shows Baileys' default). Upstream did that on purpose in d0eee796 ("fix: Resolve generation of pairing code").
+
+Build an image:
+
+```sh
+git pull && docker build -t aytzey/evolution-api:$(git rev-parse --short HEAD) .
+```
+
+Upstream changes come from release tags (`git fetch upstream --tags && git merge 2.3.x`), not `develop`: 2.4.0 requires
+licence activation.
