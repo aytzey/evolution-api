@@ -2,6 +2,7 @@ import { PrismaRepository } from '@api/repository/repository.service';
 import { WAMonitoringService } from '@api/services/monitor.service';
 import { Auth, configService, Cors, Log, Websocket } from '@config/env.config';
 import { Logger } from '@config/logger.config';
+import { sameKey } from '@utils/sameKey';
 import { Server } from 'http';
 import { Server as SocketIO } from 'socket.io';
 
@@ -56,7 +57,7 @@ export class WebsocketController extends EventController implements EventControl
 
           if (!instance) {
             const globalToken = configService.get<Auth>('AUTHENTICATION').API_KEY.KEY;
-            if (apiKey !== globalToken) {
+            if (!sameKey(apiKey, globalToken)) {
               this.logger.error('Connection rejected: invalid global token');
               return callback('Invalid global token', false);
             }
