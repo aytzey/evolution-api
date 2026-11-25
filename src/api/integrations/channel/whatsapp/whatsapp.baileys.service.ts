@@ -535,6 +535,19 @@ export class BaileysStartupService extends ChannelStartupService {
     }
   }
 
+  // fork: an edit/revoke (its carrier key, set by WhatsApp's server) may change only a message of the same chat written by
+  // the same author. Phone or LID forms of the chat both count. A group admin's revoke of another member's message is not
+  // applied (groups are ignored by KATAY CRM).
+  private sameAuthor(carrier: WAMessageKey, target: WAMessageKey) {
+    const ids = (...jids: (string | null | undefined)[]) => jids.filter(Boolean).map((jid) => jidNormalizedUser(jid));
+    const chat = ids(carrier.remoteJid, carrier.remoteJidAlt);
+    if (!ids(target.remoteJid, target.remoteJidAlt).some((jid) => chat.includes(jid))) return false;
+    if (!!carrier.fromMe !== !!target.fromMe) return false;
+    if (carrier.fromMe || !isJidGroup(carrier.remoteJid)) return true;
+    const author = ids(carrier.participant, carrier.participantAlt);
+    return ids(target.participant, target.participantAlt).some((jid) => author.includes(jid));
+  }
+
   private async getMessage(key: proto.IMessageKey, full = false) {
     try {
       // Use raw SQL to avoid JSON path issues
@@ -1138,10 +1151,36 @@ export class BaileysStartupService extends ChannelStartupService {
             }
           }
 
-          const editedMessage =
+          const protocolMessage =
             received?.message?.protocolMessage || received?.message?.editedMessage?.message?.protocolMessage;
+          // fork: only edits and revokes are MESSAGES_EDITED. Other protocol messages (history notifications, app-state key
+          // shares, placeholder answers, LID mappings) carry keys or other chats' messages and are not forwarded.
+          const editedMessage = [
+            proto.Message.ProtocolMessage.Type.MESSAGE_EDIT,
+            proto.Message.ProtocolMessage.Type.REVOKE,
+          ].includes(protocolMessage?.type)
+            ? protocolMessage
+            : undefined;
 
           if (editedMessage) {
+            // fork: `editedMessage.key` is the target as the sender wrote it (his perspective, his choice). The carrier key
+            // (`sender`) is set by WhatsApp's server: the chat it arrived in and who sent it. An edit/revoke is valid only for a
+            // message of that chat written by that author; consumers must check that, and Evolution does when it has the
+            // target stored.
+            const sender = {
+              remoteJid: received.key.remoteJid,
+              remoteJidAlt: received.key.remoteJidAlt,
+              participant: received.key.participant || undefined,
+              participantAlt: received.key.participantAlt,
+              fromMe: !!received.key.fromMe,
+              id: received.key.id,
+            };
+            const oldMessage = (await this.getMessage(editedMessage.key, true)) as any;
+            if (oldMessage?.key && !this.sameAuthor(received.key, oldMessage.key)) {
+              this.logger.verbose('Edit/revoke ignored: not sent by the author of the target message in its chat');
+              continue;
+            }
+
             if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled)
               this.chatwootService.eventWhatsapp(
                 'messages.edit',
@@ -1149,14 +1188,13 @@ export class BaileysStartupService extends ChannelStartupService {
                 editedMessage,
               );
 
-            await this.sendDataWebhook(Events.MESSAGES_EDITED, editedMessage);
+            await this.sendDataWebhook(Events.MESSAGES_EDITED, { ...editedMessage, sender });
 
             if (received.key?.id && editedMessage.key?.id) {
               await this.baileysCache.set(`protocol_${received.key.id}`, editedMessage.key.id, 60 * 60 * 24);
             }
 
-            const oldMessage = await this.getMessage(editedMessage.key, true);
-            if ((oldMessage as any)?.id) {
+            if (oldMessage?.id) {
               const editedMessageTimestamp = Long.isLong(received?.messageTimestamp)
                 ? Math.floor(received?.messageTimestamp.toNumber())
                 : Math.floor(received?.messageTimestamp as number);
@@ -1182,7 +1220,7 @@ export class BaileysStartupService extends ChannelStartupService {
             }
           }
 
-          if ((type !== 'notify' && type !== 'append') || editedMessage || !received?.message) {
+          if ((type !== 'notify' && type !== 'append') || protocolMessage || !received?.message) {
             continue;
           }
 
@@ -1675,6 +1713,12 @@ export class BaileysStartupService extends ChannelStartupService {
           }
 
           if (update.message === null && update.status === undefined) {
+            // fork: `key` is the revoke's carrier key (chat and author set by WhatsApp's server) with the target id; a stored
+            // target written by someone else, or in another chat, is not deleted.
+            if (findMessage?.key && !this.sameAuthor(key, findMessage.key)) {
+              this.logger.verbose('Revoke ignored: not sent by the author of the target message in its chat');
+              continue;
+            }
             this.sendDataWebhook(Events.MESSAGES_DELETE, { ...key, status: 'DELETED' });
 
             if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE)

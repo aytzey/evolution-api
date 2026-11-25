@@ -57,3 +57,16 @@ e> patch: expected code not found` when a Baileys upgrade moves it. Re-check eac
   `getBase64FromMediaMessage`, the re-upload path (the phone's new `directPath` is checked again), S3/webhook-base64 and the
   chatbots. `getBase64FromMediaMessage` no longer waits 5 s to retry a 400/413. Upstream has no such check (later
   versions even take the host from the sender's `url`; WhiskeySockets/Baileys#2778, #2900).
+- **Edits and deletes** (`MESSAGES_EDITED`, `MESSAGES_DELETE`). The target id comes from the sender, so the event must be
+  checked against the carrier, which WhatsApp's server sets:
+  - `MESSAGES_EDITED` is sent only for `MESSAGE_EDIT` and `REVOKE` and now carries `sender: { remoteJid, remoteJidAlt,
+    participant, participantAlt, fromMe, id }` = the chat the edit arrived in and whether we sent it. `key` stays the
+    target as the sender wrote it (his perspective): use only `key.id`.
+  - `MESSAGES_DELETE` already carried the carrier: `{ remoteJid, remoteJidAlt, fromMe, participant, id: <target>,
+    status: 'DELETED' }`.
+  - A consumer applies an edit/delete only when the target is a message of the same chat (`remoteJid` or `remoteJidAlt`)
+    whose direction matches `fromMe` (ours when `fromMe`, the contact's otherwise). Evolution does this itself when it has
+    the target stored (database or Chatwoot): otherwise the event is dropped. Group admins' deletions of other members'
+    messages are therefore not applied by Evolution.
+  - Other protocol messages (history notifications, app-state key shares with key material, placeholder answers, LID
+    mappings, disappearing-message settings) are no longer posted as `MESSAGES_EDITED`.
