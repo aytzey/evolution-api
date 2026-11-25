@@ -46,3 +46,14 @@ e> patch: expected code not found` when a Baileys upgrade moves it. Re-check eac
   (`src/Utils/process-message.ts` `SELF_ONLY_TYPES`, `src/Utils/decode-wa-message.ts`); drop this patch when upgrading to it,
   but keep the "asked for" check, which upstream does not have. All other writers of the LID store use server-set stanza
   attributes or USync answers.
+- **Media downloads** (patch `media download`). Baileys used the sender's `url` when it started with the media host and
+  otherwise `https://mmg.whatsapp.net` + `directPath`, so `directPath: "@evil.host/x"` or `".evil.host/x"` fetched another
+  host (and Evolution's retry built the same string itself); `fetch` had no time limit and the buffer no size limit. Now a
+  download goes only to `https://mmg.whatsapp.net` (parsed: no userinfo, port, IP literal or other host; a foreign `url` is
+  ignored in favour of a `directPath` starting with `/`), else `400 Media location is not a WhatsApp media path` before any
+  request. Message media is capped at `MEDIA_DOWNLOAD_MAX_MB` (default 20) with the HTTP body cancelled at the cap (`413`)
+  and limited to 60 s (`408`); history and app-state blobs (own phone / WhatsApp's server) are not capped. An error on the
+  HTTP body now reaches the reader (before, an aborted body left the reader waiting forever). This covers
+  `getBase64FromMediaMessage`, the re-upload path (the phone's new `directPath` is checked again), S3/webhook-base64 and the
+  chatbots. `getBase64FromMediaMessage` no longer waits 5 s to retry a 400/413. Upstream has no such check (later
+  versions even take the host from the sender's `url`; WhiskeySockets/Baileys#2778, #2900).
