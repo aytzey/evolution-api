@@ -32,3 +32,17 @@ git pull && docker build -t aytzey/evolution-api:$(git rev-parse --short HEAD) .
 
 Upstream changes come from release tags (`git fetch upstream --tags && git merge 2.3.x`), not `develop`: 2.4.0 requires
 licence activation.
+e> patch: expected code not found` when a Baileys upgrade moves it. Re-check each one on upgrade.
+
+- **Own-account protocol messages** (patches `own-account protocol messages`, `own-account history state`,
+  `placeholder request`). Baileys rc.9 acted on history-sync notifications, app-state key shares, LID migration mappings
+  and placeholder-resend answers from *any* sender: a stranger could inject a "message" in any customer's name (the
+  answer's inner `WebMessageInfo` became `messages.upsert`), plant LID <-> number mappings (what `resolveLid`/`lidJid`
+  return), push app-state keys, start the initial-sync state machine or make us download a "history" blob from his host.
+  These four types are now honoured only from our own account: `fromMe`, or a peer stanza whose server-set `from` is our
+  own JID/LID (rc.9 leaves `fromMe` false for those, so a plain `fromMe` check would also drop the phone's real history).
+  A placeholder answer is used only for a message id this session asked the phone for (`requestPlaceholderResend` records
+  it for an hour). Upstream master has the same four-type guard and sets `fromMe` on self peer stanzas
+  (`src/Utils/process-message.ts` `SELF_ONLY_TYPES`, `src/Utils/decode-wa-message.ts`); drop this patch when upgrading to it,
+  but keep the "asked for" check, which upstream does not have. All other writers of the LID store use server-set stanza
+  attributes or USync answers.
