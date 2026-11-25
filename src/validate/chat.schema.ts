@@ -41,6 +41,22 @@ export const whatsappNumberSchema: JSONSchema7 = {
   },
 };
 
+// fork: LID JIDs (`<digits>@lid`, optional device suffix) to map to phone JIDs.
+export const resolveLidSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    lids: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 50,
+      uniqueItems: true,
+      items: { type: 'string', pattern: '^\\d{5,20}(:\\d+)?@lid$' },
+    },
+  },
+  required: ['lids'],
+};
+
 export const readMessageSchema: JSONSchema7 = {
   $id: v4(),
   type: 'object',
