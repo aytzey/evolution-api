@@ -20,11 +20,11 @@ Evolution API release tags with fixes on top (currently `2.3.7`):
 - `POST /chat/resolveLid/{instance}` `{ lids: ["<digits>@lid", …] }` (1–50) maps LIDs to phone JIDs from the session's own LID
   mapping (Baileys learns it when we message a number or receive a message carrying both ids) and answers
   `[{ lid, jid }]`, `jid: null` when unknown. Store only, no network lookup. For a first reply that arrives with only `@lid`
-  and no `remoteJidAlt` (branch `katay-lid-lookup`, used by KATAY CRM).
+  and no `remoteJidAlt` (used by KATAY CRM).
 - `whatsappNumbers` adds `lidJid` to an existing number when the session already knows its LID (store only; Baileys'
   `getLIDForPN` would ask WhatsApp on a miss, one more lookup per number).
 
-## Security fixes (branch `katay-lid-lookup`, from the KATAY CRM review WA-SECURITY S1, S2, S7, S9, S13, N2)
+## Security fixes (in `stable` since 25.11.2026; from the KATAY CRM review WA-SECURITY S1, S2, S7, S9, S13, N2)
 
 Baileys changes live in `fork/patch-baileys.mjs`: each edit names the exact code it replaces, and the Docker build stops
 with `Baileys <name> patch: expected code not found` when a Baileys upgrade moves it. Re-check each one on upgrade.
