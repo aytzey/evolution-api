@@ -14,6 +14,8 @@ export class OnWhatsAppDto {
     public readonly number: string,
     public readonly name?: string,
     public readonly lid?: string,
+    // fork: the number's LID when this session already knows it (see BaileysStartupService.knownLid).
+    public readonly lidJid?: string,
   ) {}
 }
 
@@ -24,6 +26,11 @@ export class getBase64FromMediaMessageDto {
 
 export class WhatsAppNumberDto {
   numbers: string[];
+}
+
+// fork: see BaileysStartupService.resolveLid.
+export class ResolveLidDto {
+  lids: string[];
 }
 
 export class NumberDto {

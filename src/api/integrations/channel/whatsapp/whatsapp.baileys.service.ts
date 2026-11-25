@@ -11,6 +11,7 @@ import {
   OnWhatsAppDto,
   PrivacySettingDto,
   ReadMessageDto,
+  ResolveLidDto,
   SendPresenceDto,
   UpdateMessageDto,
   WhatsAppNumberDto,
@@ -3758,6 +3759,7 @@ export class BaileysStartupService extends ChannelStartupService {
           user.number,
           contacts.find((c) => c.remoteJid === numberJid)?.pushName,
           undefined,
+          numberVerified?.exists ? await this.knownLid(numberJid) : undefined,
         );
       }),
     );
@@ -3784,6 +3786,34 @@ export class BaileysStartupService extends ChannelStartupService {
     }
 
     return onWhatsapp;
+  }
+
+  // fork: the LID Baileys has stored for a phone JID (learned when we message the number or receive a message carrying both
+  // ids). Store only: Baileys' getLIDForPN would ask WhatsApp (USync) on a miss, one more lookup per number.
+  private async knownLid(jid: string): Promise<string | undefined> {
+    try {
+      const user = jid.split('@')[0].split(':')[0];
+      const stored = await this.instance.authState?.state?.keys?.get('lid-mapping', [user]);
+      const lid = stored?.[user];
+      return typeof lid === 'string' && /^\d+$/.test(lid) ? `${lid}@lid` : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // fork: maps LID JIDs to phone JIDs from the session's own LID mapping, without a network lookup. A first reply to a number
+  // we wrote to can arrive with only `@lid` and no `remoteJidAlt`; the consumer resolves it here. Unknown → `jid: null`.
+  public async resolveLid(data: ResolveLidDto) {
+    return Promise.all(
+      data.lids.map(async (lid) => {
+        try {
+          const pn = await this.client?.signalRepository?.lidMapping?.getPNForLID(lid);
+          return { lid, jid: typeof pn === 'string' && pn ? pn.replace(/:\d+@/, '@') : null };
+        } catch {
+          return { lid, jid: null };
+        }
+      }),
+    );
   }
 
   public async markMessageAsRead(data: ReadMessageDto) {

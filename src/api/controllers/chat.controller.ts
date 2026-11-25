@@ -10,6 +10,7 @@ import {
   ProfilePictureDto,
   ProfileStatusDto,
   ReadMessageDto,
+  ResolveLidDto,
   SendPresenceDto,
   UpdateMessageDto,
   WhatsAppNumberDto,
@@ -24,6 +25,11 @@ export class ChatController {
 
   public async whatsappNumber({ instanceName }: InstanceDto, data: WhatsAppNumberDto) {
     return await this.waMonitor.waInstances[instanceName].whatsappNumber(data);
+  }
+
+  // fork: see BaileysStartupService.resolveLid.
+  public async resolveLid({ instanceName }: InstanceDto, data: ResolveLidDto) {
+    return await this.waMonitor.waInstances[instanceName].resolveLid(data);
   }
 
   public async readMessage({ instanceName }: InstanceDto, data: ReadMessageDto) {

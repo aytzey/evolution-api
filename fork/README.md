@@ -17,6 +17,12 @@ Evolution API release tags with fixes on top (currently `2.3.7`):
   memory for 24 h, and the next call for that chat returns it at once as `status: late` without asking the phone again (a
   restart clears them). An answer is matched to its request by `peerDataRequestSessionId`, else by chat (phone or LID id).
   On-demand history no longer prints the messages to stdout.
+- `POST /chat/resolveLid/{instance}` `{ lids: ["<digits>@lid", …] }` (1–50) maps LIDs to phone JIDs from the session's own LID
+  mapping (Baileys learns it when we message a number or receive a message carrying both ids) and answers
+  `[{ lid, jid }]`, `jid: null` when unknown. Store only, no network lookup. For a first reply that arrives with only `@lid`
+  and no `remoteJidAlt` (branch `katay-lid-lookup`, used by KATAY CRM).
+- `whatsappNumbers` adds `lidJid` to an existing number when the session already knows its LID (store only; Baileys'
+  `getLIDForPN` would ask WhatsApp on a miss, one more lookup per number).
 
 Build an image:
 
